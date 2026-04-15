@@ -184,20 +184,21 @@ def main():
     if auto.get("receiver_recurrence_id"):
         st.markdown(f"**Recurrence ID:** `{auto['receiver_recurrence_id']}`")
 
-    auto_qr_img = (
-        auto.get("qrcode")
+    qr_img = (
+        pix.get("qrcode")
+        or auto.get("qrcode")
         or auto.get("qr_code")
         or auto.get("qrcode_url")
         or auto.get("authorization_qrcode")
     )
-    auto_qr_text = (
-        auto.get("qrcode_text")
+    qr_text = (
+        pix.get("qrcode_text")
+        or auto.get("qrcode_text")
         or auto.get("qr_code_text")
         or auto.get("emv")
         or auto.get("authorization_qrcode_text")
         or auto.get("copy_paste")
     )
-    auto_url = auto.get("authorization_url") or auto.get("url")
 
     st.divider()
     st.subheader("🔁 Pix Automático — pagamento + recorrência")
@@ -205,22 +206,22 @@ def main():
         "Ao escanear este QR Code, o cliente paga a 1ª parcela e já autoriza "
         "automaticamente a recorrência no mesmo ato."
     )
-    if auto_qr_img or auto_qr_text:
-        if auto_qr_img:
-            st.image(auto_qr_img, caption="QR Code - Pix Automático (pagamento + recorrência)", width=260)
-        if auto_qr_text:
+    if qr_img or qr_text:
+        if qr_img:
+            st.image(qr_img, caption="QR Code - Pix Automático (pagamento + recorrência)", width=260)
+        if qr_text:
             st.markdown("**Código copia e cola:**")
-            st.code(auto_qr_text, language=None)
+            st.code(qr_text, language=None)
         st.info(
             "📱 Compartilhe **apenas este QR Code / código copia e cola** com o cliente. "
-            "Não envie a página de pagamento da iugu — lá o cliente pode desabilitar a recorrência."
+            "Na jornada 3 da iugu, este mesmo QR cobra a 1ª parcela e autoriza a recorrência "
+            "automaticamente no mesmo ato — o cliente não escolhe nada."
         )
     else:
         st.warning(
-            "⚠️ Nenhum QR Code de Pix Automático foi retornado pela iugu. "
-            "Veja abaixo o conteúdo do objeto `automatic_pix`."
+            "⚠️ Nenhum QR Code foi retornado pela iugu. Veja a resposta abaixo."
         )
-        st.json(auto)
+        st.json({"pix": pix, "automatic_pix": auto})
 
     with st.expander("🧪 Ver resposta completa da iugu (debug)"):
         st.json(data)
