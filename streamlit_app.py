@@ -223,6 +223,9 @@ def main():
         )
         st.json({"pix": pix, "automatic_pix": auto})
 
+    if data.get("secure_url"):
+        st.link_button("🔗 Abrir página de pagamento iugu", data["secure_url"])
+
     with st.expander("🧪 Ver resposta completa da iugu (debug)"):
         st.json(data)
 
