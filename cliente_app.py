@@ -88,6 +88,7 @@ def obter_ou_criar_cliente(token, dados):
 def criar_assinatura(token, customer_id, config, contract_number):
     payload = {
         "customer_id": customer_id,
+        "plan_identifier": config["plan_identifier"],
         "only_on_charge_success": False,
         "payable_with": "pix",
         "subitems": [
