@@ -54,7 +54,7 @@ def criar_cliente(token, dados):
     payload = {
         "name": dados["nome_completo"],
         "email": dados["email"],
-        "cpf_cnpj": dados["cnpj"],
+        "cpf_cnpj": dados["documento"],
         "phone_prefix": ddd,
         "phone": numero,
         "notes": dados["endereco"],
@@ -62,7 +62,6 @@ def criar_cliente(token, dados):
             {"name": "marca", "value": dados["marca"]},
             {"name": "razao_social", "value": dados["razao_social"]},
             {"name": "whatsapp", "value": dados["whatsapp"]},
-            {"name": "instagram", "value": dados["instagram"]},
             {"name": "endereco", "value": dados["endereco"]},
         ],
     }
@@ -71,7 +70,7 @@ def criar_cliente(token, dados):
 
 
 def obter_ou_criar_cliente(token, dados):
-    existente = buscar_cliente_por_documento(token, dados["cnpj"])
+    existente = buscar_cliente_por_documento(token, dados["documento"])
     if existente:
         return existente, True, None
     r = criar_cliente(token, dados)
@@ -112,7 +111,7 @@ def criar_fatura_automatic_pix(token, customer_id, subscription_id, config, dado
         ],
         "payer": {
             "name": dados["nome_completo"],
-            "cpf_cnpj": dados["cnpj"],
+            "cpf_cnpj": dados["documento"],
             "email": dados["email"],
         },
         "automatic_pix": {
@@ -126,11 +125,14 @@ def criar_fatura_automatic_pix(token, customer_id, subscription_id, config, dado
     return r
 
 
-def render_form(config):
-    st.markdown(
-        f"### {config['titulo']}\n"
-        f"Valor: **R$ {config['valor_cents']/100:.2f}** — cobrança mensal via Pix Automático."
-    )
+def render_form(config, permitir_valor_manual=False):
+    st.markdown(f"### {config['titulo']}")
+    if not permitir_valor_manual:
+        st.markdown(
+            f"Valor: **R$ {config['valor_cents']/100:.2f}** — cobrança mensal via Pix Automático."
+        )
+    else:
+        st.markdown("🧪 **Modo de teste** — informe abaixo o valor a pagar.")
     st.caption(
         "Preencha seus dados abaixo. Ao pagar o Pix gerado, sua assinatura é ativada "
         "e as próximas cobranças são debitadas automaticamente todo mês — você não "
@@ -142,14 +144,20 @@ def render_form(config):
         with col1:
             nome = st.text_input("Qual é o seu nome?*")
             marca = st.text_input("Qual o nome da sua marca?*")
-            cnpj = st.text_input("Qual o CNPJ da sua marca?* (só números)")
+            documento = st.text_input("Qual o CNPJ ou CPF da sua marca?* (só números)")
             whatsapp = st.text_input("Qual o seu número de WhatsApp?* (só números, com DDD)")
-            instagram = st.text_input("Qual o Instagram da sua marca?*")
         with col2:
             sobrenome = st.text_input("Qual é o seu sobrenome?*")
             razao_social = st.text_input("Qual a razão social da sua empresa?*")
             email = st.text_input("Qual o seu e-mail?*")
             endereco = st.text_input("Qual o endereço da sua loja ou fábrica?*")
+
+        valor_manual = None
+        if permitir_valor_manual:
+            valor_manual = st.number_input(
+                "Valor a pagar (R$)*",
+                min_value=0.01, value=1.00, step=0.50, format="%.2f",
+            )
 
         submitted = st.form_submit_button(
             "Gerar Pix Automático", type="primary", use_container_width=True
@@ -159,22 +167,23 @@ def render_form(config):
         return None
     return {
         "nome": nome, "sobrenome": sobrenome, "marca": marca,
-        "razao_social": razao_social, "cnpj": cnpj, "email": email,
-        "whatsapp": whatsapp, "endereco": endereco, "instagram": instagram,
+        "razao_social": razao_social, "documento": documento, "email": email,
+        "whatsapp": whatsapp, "endereco": endereco,
+        "valor_manual": valor_manual,
     }
 
 
 def validar(form):
-    cnpj_limpo = limpar_digitos(form["cnpj"])
+    doc_limpo = limpar_digitos(form["documento"])
     whatsapp_limpo = limpar_digitos(form["whatsapp"])
     obrigatorios = [
         form["nome"], form["sobrenome"], form["marca"], form["razao_social"],
-        cnpj_limpo, form["email"], whatsapp_limpo, form["endereco"], form["instagram"],
+        doc_limpo, form["email"], whatsapp_limpo, form["endereco"],
     ]
     if not all(obrigatorios):
         return None, "Preencha todos os campos obrigatórios."
-    if len(cnpj_limpo) != 14:
-        return None, "CNPJ inválido — precisa ter 14 dígitos."
+    if len(doc_limpo) not in (11, 14):
+        return None, "CPF/CNPJ inválido — informe 11 dígitos (CPF) ou 14 dígitos (CNPJ)."
     if len(whatsapp_limpo) not in (10, 11, 12, 13):
         return None, "WhatsApp inválido — informe com DDD (ex.: 11999998888)."
     if "@" not in form["email"]:
@@ -183,12 +192,11 @@ def validar(form):
     dados = {
         "nome_completo": f"{form['nome'].strip()} {form['sobrenome'].strip()}",
         "email": form["email"].strip(),
-        "cnpj": cnpj_limpo,
+        "documento": doc_limpo,
         "marca": form["marca"].strip(),
         "razao_social": form["razao_social"].strip(),
         "whatsapp": whatsapp_limpo,
         "endereco": form["endereco"].strip(),
-        "instagram": form["instagram"].strip(),
     }
     return dados, None
 
@@ -202,7 +210,7 @@ def processar(config, dados):
             return
 
     if not customer_id:
-        st.error("Não foi possível cadastrar seu CNPJ na iugu.")
+        st.error("Não foi possível cadastrar seu CPF/CNPJ na iugu.")
         try:
             st.json(r_cliente.json())
         except Exception:
@@ -210,7 +218,7 @@ def processar(config, dados):
         return
 
     if reutilizado:
-        st.info("🔎 Identificamos seu CNPJ já cadastrado — vamos vincular a fatura ao seu cadastro existente.")
+        st.info("🔎 Identificamos seu CPF/CNPJ já cadastrado — vamos vincular a fatura ao seu cadastro existente.")
 
     with st.spinner("Criando sua assinatura..."):
         try:
@@ -242,7 +250,7 @@ def processar(config, dados):
     with st.spinner("Gerando seu Pix Automático..."):
         try:
             r_inv = criar_fatura_automatic_pix(
-                config["token"], customer_id, subscription_id, config, dados, f"CTR-{dados['cnpj']}"
+                config["token"], customer_id, subscription_id, config, dados, f"CTR-{dados['documento']}"
             )
         except requests.RequestException as e:
             st.error(f"Erro ao gerar fatura: {e}")
@@ -288,11 +296,11 @@ def processar(config, dados):
         st.json({"pix": pix, "automatic_pix": auto})
 
 
-def main():
+def main(permitir_valor_manual=False):
     config = carregar_config()
     st.set_page_config(page_title=config["titulo"], page_icon="💳", layout="centered")
 
-    form = render_form(config)
+    form = render_form(config, permitir_valor_manual=permitir_valor_manual)
     if form is None:
         return
 
@@ -300,6 +308,9 @@ def main():
     if erro:
         st.error(erro)
         return
+
+    if permitir_valor_manual and form.get("valor_manual"):
+        config["valor_cents"] = int(round(float(form["valor_manual"]) * 100))
 
     processar(config, dados)
 
