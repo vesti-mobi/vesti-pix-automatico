@@ -6,6 +6,14 @@ import streamlit as st
 
 BASE_URL = "https://api.iugu.com/v1"
 
+FREQ_LABEL = {
+    "weekly": "semanal",
+    "monthly": "mensal",
+    "quarterly": "trimestral",
+    "semiannually": "semestral",
+    "yearly": "anual",
+}
+
 
 def carregar_config():
     c = st.secrets["config"]
@@ -16,6 +24,8 @@ def carregar_config():
         "valor_cents": int(c["valor_cents"]),
         "descricao": c["descricao"],
         "titulo": c.get("titulo", "Assinatura"),
+        "frequency": c.get("frequency", "monthly"),
+        "financeiro_email": c.get("financeiro_email", ""),
     }
 
 
@@ -101,6 +111,10 @@ def cancelar_fatura(token, invoice_id):
     return requests.put(f"{BASE_URL}/invoices/{invoice_id}/cancel", auth=(token, ""), timeout=30)
 
 
+def consultar_invoice(token, invoice_id):
+    return requests.get(f"{BASE_URL}/invoices/{invoice_id}", auth=(token, ""), timeout=30)
+
+
 def criar_fatura_automatic_pix(token, customer_id, subscription_id, config, dados, contract_number):
     hoje = date.today()
     due = (hoje + timedelta(days=3)).isoformat()
@@ -124,27 +138,30 @@ def criar_fatura_automatic_pix(token, customer_id, subscription_id, config, dado
         },
         "automatic_pix": {
             "journey": 3,
-            "frequency": "monthly",
+            "frequency": config.get("frequency", "monthly"),
             "recurrence_beginning": due,
             "contract_number": contract_number[:35],
         },
     }
+    if config.get("financeiro_email"):
+        payload["cc_emails"] = config["financeiro_email"]
     r = requests.post(f"{BASE_URL}/invoices", auth=(token, ""), json=payload, timeout=30)
     return r
 
 
 def render_form(config, permitir_valor_manual=False):
+    freq_txt = FREQ_LABEL.get(config.get("frequency", "monthly"), "recorrente")
     st.markdown(f"### {config['titulo']}")
     if not permitir_valor_manual:
         st.markdown(
-            f"Valor: **R$ {config['valor_cents']/100:.2f}** — cobrança mensal via Pix Automático."
+            f"Valor: **R$ {config['valor_cents']/100:.2f}** — cobrança {freq_txt} via Pix Automático."
         )
     else:
         st.markdown("🧪 **Modo de teste** — informe abaixo o valor a pagar.")
     st.caption(
         "Preencha seus dados abaixo. Ao pagar o Pix gerado, sua assinatura é ativada "
-        "e as próximas cobranças são debitadas automaticamente todo mês — você não "
-        "precisa gerar outro QR."
+        f"e as próximas cobranças são debitadas automaticamente ({freq_txt}) — você "
+        "não precisa gerar outro QR."
     )
 
     with st.form("cadastro_cliente"):
@@ -272,34 +289,74 @@ def processar(config, dados):
             st.code(r_inv.text)
         return
 
-    data = r_inv.json()
+    st.session_state["invoice_data"] = r_inv.json()
+    st.session_state["invoice_id"] = r_inv.json().get("id")
+    mostrar_pagamento(config)
+
+
+def mostrar_pagamento(config):
+    data = st.session_state.get("invoice_data") or {}
+    invoice_id = st.session_state.get("invoice_id")
     pix = data.get("pix") or {}
     auto = data.get("automatic_pix") or {}
     qr_img = pix.get("qrcode")
     qr_text = pix.get("qrcode_text")
+    status = (data.get("status") or "").lower()
+    freq_txt = FREQ_LABEL.get(config.get("frequency", "monthly"), "recorrente")
 
-    st.success("✅ Pix Automático gerado! Pague abaixo para ativar sua assinatura.")
+    status_label = {
+        "paid": "🟢 Pago",
+        "pending": "⚪ Aguardando pagamento",
+        "canceled": "⚫ Cancelada",
+        "expired": "⚫ Expirada",
+    }.get(status, f"❔ {status or 'desconhecido'}")
+
+    if status == "paid":
+        st.success("✅ Pagamento confirmado! Sua assinatura está ativa.")
+    else:
+        st.success("✅ Pix Automático gerado! Pague abaixo para ativar sua assinatura.")
+
     st.markdown(f"**Valor:** R$ {(data.get('total_cents') or config['valor_cents'])/100:.2f}")
+    st.markdown(f"**Status:** {status_label}")
 
-    if qr_img:
-        st.image(qr_img, caption="QR Code Pix Automático", width=280)
-    if qr_text:
-        st.markdown("**Pix Copia e Cola:**")
-        st.code(qr_text, language=None)
-    if data.get("secure_url"):
-        st.link_button(
-            "Abrir página de pagamento iugu", data["secure_url"], use_container_width=True
+    if status != "paid":
+        if qr_img:
+            st.image(qr_img, caption="QR Code Pix Automático", width=280)
+        if qr_text:
+            st.markdown("**Pix Copia e Cola:**")
+            st.code(qr_text, language=None)
+        if data.get("secure_url"):
+            st.link_button(
+                "Abrir página de pagamento iugu", data["secure_url"], use_container_width=True
+            )
+
+        st.info(
+            f"🔁 Ao pagar este QR Code, você autoriza a recorrência {freq_txt} automática — "
+            "nas próximas cobranças o valor é debitado direto, sem precisar gerar novo Pix."
         )
-
-    st.info(
-        "🔁 Ao pagar este QR Code, você autoriza a recorrência mensal automática — "
-        "nas próximas cobranças o valor é debitado direto, sem precisar gerar novo Pix."
-    )
 
     if auto.get("receiver_recurrence_id"):
         st.caption(f"ID da recorrência: `{auto['receiver_recurrence_id']}`")
 
-    if not (qr_img or qr_text or data.get("secure_url")):
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("🔄 Atualizar", type="primary", use_container_width=True):
+            try:
+                r = consultar_invoice(config["token"], invoice_id)
+                if r.status_code < 400:
+                    st.session_state["invoice_data"] = r.json()
+                    st.rerun()
+                else:
+                    st.error("Não foi possível consultar o status. Tente novamente.")
+            except requests.RequestException as e:
+                st.error(f"Erro ao atualizar: {e}")
+    with col2:
+        if st.button("Gerar novo Pix", use_container_width=True):
+            st.session_state.pop("invoice_id", None)
+            st.session_state.pop("invoice_data", None)
+            st.rerun()
+
+    if status != "paid" and not (qr_img or qr_text or data.get("secure_url")):
         st.warning("Não conseguimos exibir o Pix aqui. Entre em contato com o suporte.")
         st.json({"pix": pix, "automatic_pix": auto})
 
@@ -307,6 +364,10 @@ def processar(config, dados):
 def main(permitir_valor_manual=False):
     config = carregar_config()
     st.set_page_config(page_title=config["titulo"], page_icon="💳", layout="centered")
+
+    if "invoice_id" in st.session_state:
+        mostrar_pagamento(config)
+        return
 
     form = render_form(config, permitir_valor_manual=permitir_valor_manual)
     if form is None:
